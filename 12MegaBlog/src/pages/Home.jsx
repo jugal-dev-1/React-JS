@@ -4,13 +4,23 @@ import {Container, PostCard} from '../components'
 
 function Home() {
     const [posts, setPosts] = useState([])
+    const [error, setError] = useState("")
 
     useEffect(() => {
-        appwriteService.getPosts().then((posts) => {
-            if (posts) {
-                setPosts(posts.documents)
-            }
-        })
+        let isMounted = true
+
+        appwriteService.getPosts()
+            .then((result) => {
+                if (isMounted) setPosts(result.rows)
+            })
+            .catch((requestError) => {
+                console.error("Failed to load posts:", requestError)
+                if (isMounted) setError(requestError?.message || "Posts could not be loaded.")
+            })
+
+        return () => {
+            isMounted = false
+        }
     }, [])
   
     if (posts.length === 0) {
@@ -19,9 +29,13 @@ function Home() {
                 <Container>
                     <div className="flex flex-wrap">
                         <div className="p-2 w-full">
-                            <h1 className="text-2xl font-bold hover:text-gray-500">
-                                Login to read posts
-                            </h1>
+                            {error ? (
+                                <p role="alert" className="text-red-600">{error}</p>
+                            ) : (
+                                <h1 className="text-2xl font-bold hover:text-gray-500">
+                                    Login to read posts
+                                </h1>
+                            )}
                         </div>
                     </div>
                 </Container>

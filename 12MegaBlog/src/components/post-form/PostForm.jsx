@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useForm, useWatch } from "react-hook-form";
 import { Button, Input, RTE, Select } from "..";
 import appwriteService from "../../appwrite/config";
@@ -9,7 +9,7 @@ export default function PostForm({ post }) {
     const { register, handleSubmit, setValue, control, getValues } = useForm({
         defaultValues: {
             title: post?.title || "",
-            slug: post?.$id || "",
+            slug: post?.slug || "",
             content: post?.content || "",
             status: post?.status || "active",
         },
@@ -19,36 +19,65 @@ export default function PostForm({ post }) {
     const userData = useSelector((state) => state.auth.userData);
     const title = useWatch({ control, name: "title" });
     const previousTitle = useRef(title);
+    const [submitError, setSubmitError] = useState("");
+    const [isSubmitting, setIsSubmitting] = useState(false);
 
     const submit = async (data) => {
-        if (post) {
-            const file = data.image[0] ? await appwriteService.uploadFile(data.image[0]) : null;
+        setSubmitError("");
+        setIsSubmitting(true);
 
-            if (file) {
-                appwriteService.deleteFile(post.featuredImage);
+        try {
+            if (!userData?.$id) {
+                throw new Error("Your login session is missing. Please log in again.");
             }
 
-            const dbPost = await appwriteService.updatePost(post.$id, {
+            if (post) {
+                const image = data.image?.[0];
+                const file = image ? await appwriteService.uploadFile(image) : null;
+                const dbPost = await appwriteService.updatePost(post.$id, {
+                    ...data,
+                    featuredImage: file?.$id || post.featuredImage,
+                });
+
+                if (!dbPost) {
+                    throw new Error("Appwrite did not return the updated post.");
+                }
+
+                if (file && post.featuredImage) {
+                    await appwriteService.deleteFile(post.featuredImage);
+                }
+
+                navigate(`/post/${dbPost.$id}`);
+                return;
+            }
+
+            const file = await appwriteService.uploadFile(data.image?.[0]);
+            const dbPost = await appwriteService.createPost({
                 ...data,
-                featuredImage: file ? file.$id : undefined,
+                featuredImage: file.$id,
+                userId: userData.$id,
             });
 
-            if (dbPost) {
-                navigate(`/post/${dbPost.$id}`);
+            if (!dbPost) {
+                throw new Error("Appwrite did not return the created post.");
             }
-        } else {
-            const file = await appwriteService.uploadFile(data.image[0]);
 
-            if (file) {
-                const fileId = file.$id;
-                data.featuredImage = fileId;
-                const dbPost = await appwriteService.createPost({ ...data, userId: userData.$id });
-
-                if (dbPost) {
-                    navigate(`/post/${dbPost.$id}`);
-                }
+            navigate(`/post/${dbPost.$id}`);
+        } catch (error) {
+            console.error("Post form submission failed:", error);
+            if (error?.code === 404) {
+                setSubmitError("Appwrite returned 404. Check that the project, database, collection, and storage bucket IDs exist in the same Appwrite project.");
+            } else {
+                setSubmitError(error?.message || "The post could not be saved. Check the browser console for details.");
             }
+        } finally {
+            setIsSubmitting(false);
         }
+    };
+
+    const handleInvalidSubmit = (errors) => {
+        const firstError = Object.values(errors).find((error) => error?.message);
+        setSubmitError(firstError?.message || "Please complete all required fields before submitting.");
     };
 
     const slugTransform = useCallback((value) => {
@@ -70,19 +99,19 @@ export default function PostForm({ post }) {
     }, [title, slugTransform, setValue]);
 
     return (
-        <form onSubmit={handleSubmit(submit)} className="flex flex-wrap">
+        <form onSubmit={handleSubmit(submit, handleInvalidSubmit)} className="flex flex-wrap">
             <div className="w-2/3 px-2">
                 <Input
                     label="Title :"
                     placeholder="Title"
                     className="mb-4"
-                    {...register("title", { required: true })}
+                    {...register("title", { required: "Title is required." })}
                 />
                 <Input
                     label="Slug :"
                     placeholder="Slug"
                     className="mb-4"
-                    {...register("slug", { required: true })}
+                    {...register("slug", { required: "Slug is required." })}
                     onInput={(e) => {
                         setValue("slug", slugTransform(e.currentTarget.value), { shouldValidate: true });
                     }}
@@ -95,12 +124,12 @@ export default function PostForm({ post }) {
                     type="file"
                     className="mb-4"
                     accept="image/png, image/jpg, image/jpeg, image/gif"
-                    {...register("image", { required: !post })}
+                    {...register("image", { required: post ? false : "Please select a featured image." })}
                 />
                 {post && (
                     <div className="w-full mb-4">
                         <img
-                            src={appwriteService.getFilePreview(post.featuredImage)}
+                            src={appwriteService.getFileView(post.featuredImage)}
                             alt={post.title}
                             className="rounded-lg"
                         />
@@ -110,10 +139,20 @@ export default function PostForm({ post }) {
                     options={["active", "inactive"]}
                     label="Status"
                     className="mb-4"
-                    {...register("status", { required: true })}
+                    {...register("status", { required: "Please select a status." })}
                 />
-                <Button type="submit" bgColor={post ? "bg-green-500" : undefined} className="w-full">
-                    {post ? "Update" : "Submit"}
+                {submitError && (
+                    <p role="alert" className="mb-4 w-full text-sm text-red-600">
+                        {submitError}
+                    </p>
+                )}
+                <Button
+                    type="submit"
+                    bgColor={post ? "bg-green-500" : undefined}
+                    className="w-full"
+                    disabled={isSubmitting}
+                >
+                    {isSubmitting ? "Saving..." : post ? "Update" : "Submit"}
                 </Button>
             </div>
         </form>
